@@ -69,11 +69,11 @@ def main() -> None:
         description="Data Augmentation SOLO su Training (HC e PD separati)"
     )
     parser.add_argument(
-        "--train-dir", type=Path, default=Path("data/Training"),          # FIX: aggiunto data/
+        "--train-dir", type=Path, default=Path("data/Training"),          
         help="Cartella Training con sottocartelle HC e PD"
     )
     parser.add_argument(
-        "--out-dir", type=Path, default=Path("data/Training_augmented"),  # FIX: aggiunto data/
+        "--out-dir", type=Path, default=Path("data/Training_augmented"),  
         help="Cartella di destinazione per i WAV augmentati"
     )
     args = parser.parse_args()
@@ -87,7 +87,6 @@ def main() -> None:
         # Prendo tutti i wav
         orig_paths = sorted(input_dir.glob("*.wav"))
 
-        # FIX: output_dir include già la label → niente doppio annidamento
         output_dir = args.out_dir / label
 
         print(f"Augmentazione per classe '{label}' ({len(orig_paths)} file)...")
