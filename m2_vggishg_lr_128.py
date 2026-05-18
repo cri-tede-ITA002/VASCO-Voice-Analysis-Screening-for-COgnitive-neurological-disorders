@@ -79,7 +79,7 @@ def extract_vggish_embeddings(file_path, model):
         if embedding.ndim == 1:
             embedding = embedding.unsqueeze(0)
 
-        # vogliamo esattamente 4 frame da 128D
+
         if embedding.shape[0] < FRAMES_PER_AUDIO:
             pad = torch.zeros(FRAMES_PER_AUDIO - embedding.shape[0], FRAME_EMBED_SIZE)
             embedding = torch.cat([embedding, pad], dim=0)
@@ -173,7 +173,7 @@ def compute_metrics_dict(y_true, y_prob, threshold=0.5):
     }
 
 # =========================================================
-# FINAL PLOTS ONLY
+# FINAL PLOTS
 # =========================================================
 def save_final_metrics_and_plots(y_true, y_prob, out_prefix="vggish_cv_final", threshold=0.5):
     metrics = compute_metrics_dict(y_true, y_prob, threshold=threshold)
@@ -335,7 +335,7 @@ def run_stratified_kfold_cv_only(X, y, file_paths, n_splits=5):
           f"TN={final_oof_metrics['tn']}  FN={final_oof_metrics['fn']}")
     print("=" * 60)
 
-    # salva tutto
+
     with open(CHECKPOINT_DIR / "vggish_stratified_kfold_cv_metrics.json", "w", encoding="utf-8") as f:
         json.dump(
             {
