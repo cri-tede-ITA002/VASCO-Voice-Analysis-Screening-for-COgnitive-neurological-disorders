@@ -35,7 +35,7 @@ TRAIN_DIR      = Path("data/Training_augmented")
 TEST_DIR       = Path("data/Test")                 
 
 PLOT_DIR       = Path("milestone2/plots")
-CHECKPOINT_DIR = Path("milestone2/checkpoints")
+CHECKPOINT_DIR = Path("checkpoints/checkpoints_crnn")
 STATS_DIR      = Path("milestone2/stats")
 for d in (CHECKPOINT_DIR, PLOT_DIR, STATS_DIR):
     d.mkdir(parents=True, exist_ok=True)
@@ -232,6 +232,72 @@ def evaluate(model: nn.Module, loader: DataLoader, device: str = 'cpu') -> dict:
     }
 
 
+def bootstrap_evaluate(
+    y_true: np.ndarray,
+    y_prob: np.ndarray,
+    threshold: float,
+    n_iterations: int = 1000,
+    ci: float = 0.95,
+    seed: int = RANDOM_SEED,
+) -> dict:
+    """
+    Bootstrap sul test set: campiona con rimpiazzo n_iterations volte
+    e calcola media, std e intervallo di confidenza per acc, precision,
+    recall, f1 e roc_auc.
+    """
+    rng = np.random.default_rng(seed)
+    n   = len(y_true)
+
+    metrics_boot: dict[str, list] = {
+        'acc': [], 'precision': [], 'recall': [], 'f1': [], 'roc_auc': []
+    }
+
+    for _ in range(n_iterations):
+        idx   = rng.integers(0, n, size=n)
+        yt    = y_true[idx]
+        yp    = y_prob[idx]
+        ypred = (yp > threshold).astype(np.float32)
+
+        metrics_boot['acc'].append(accuracy_score(yt, ypred))
+        p, r, f, _ = precision_recall_fscore_support(
+            yt, ypred, average='binary', zero_division=0
+        )
+        metrics_boot['precision'].append(p)
+        metrics_boot['recall'].append(r)
+        metrics_boot['f1'].append(f)
+        try:
+            metrics_boot['roc_auc'].append(roc_auc_score(yt, yp))
+        except ValueError:          # campione con una sola classe
+            pass
+
+    alpha   = 1.0 - ci
+    results = {}
+    for name, values in metrics_boot.items():
+        arr = np.array(values)
+        results[name] = {
+            'mean':  float(np.mean(arr)),
+            'std':   float(np.std(arr)),
+            'lower': float(np.percentile(arr, 100 * alpha / 2)),
+            'upper': float(np.percentile(arr, 100 * (1 - alpha / 2))),
+        }
+    return results
+
+
+def print_bootstrap_results(boot: dict, ci: float = 0.95, n_iterations: int = 1000) -> None:
+    ci_pct = int(ci * 100)
+    print(f"\n{'='*55}")
+    print(f"BOOTSTRAP ({n_iterations} iterazioni, CI {ci_pct}%)")
+    print(f"{'='*55}")
+    header = f"  {'Metric':<12}  {'Mean':>7}  {'Std':>7}  {'CI lower':>9}  {'CI upper':>9}"
+    print(header)
+    print(f"  {'-'*56}")
+    for name, vals in boot.items():
+        print(
+            f"  {name:<12}  {vals['mean']:>7.4f}  {vals['std']:>7.4f}"
+            f"  {vals['lower']:>9.4f}  {vals['upper']:>9.4f}"
+        )
+
+
 def plot_confusion_matrix(cm: np.ndarray, path: Path, title: str = 'Confusion Matrix') -> None:
     plt.figure(figsize=(4, 4))
     plt.imshow(cm, cmap='Blues')
@@ -421,23 +487,29 @@ def main() -> None:
     best_model.load_state_dict(best_state)
     final = evaluate(best_model, test_dl, device)
 
-    for k, v in final.items():
-        if not isinstance(v, np.ndarray):
-            print(f"  {k:12}: {v:.4f}" if isinstance(v, float) else f"  {k:12}: {v}")
+    scalar_keys = [k for k, v in final.items() if not isinstance(v, np.ndarray)]
+    for k in scalar_keys:
+        v = final[k]
+        print(f"  {k:12}: {v:.4f}" if isinstance(v, float) else f"  {k:12}: {v}")
+
+    # Bootstrap sul test set
+    boot = bootstrap_evaluate(
+        final['y_true'], final['probs'], final['threshold'],
+        n_iterations=1000, ci=0.95
+    )
+    print_bootstrap_results(boot, ci=0.95, n_iterations=1000)
 
     # Salva plots
     plot_confusion_matrix(final['cm'],   STATS_DIR / 'test_confusion_matrix-CRNN.png', 'Test Set - Confusion Matrix')
     plot_roc_curve(final['y_true'], final['probs'], STATS_DIR / 'test_roc_curve-CRNN.png', 'Test Set - ROC Curve')
     plot_training_curves(history,        STATS_DIR / 'training_curves-CRNN.png')
 
-   
-    
-
     # Salva checkpoint finale
     torch.save(
         {'model_state_dict': best_state,
          'best_auc': best_auc,
-         'test_metrics': {k: final[k] for k in scalar_keys}},
+         'test_metrics': {k: final[k] for k in scalar_keys},
+         'bootstrap': boot},
         CHECKPOINT_DIR / 'best_model_final.pt'
     )
 
@@ -445,7 +517,7 @@ def main() -> None:
     print(f"  → milestone2/stats/training_curves-CRNN.png")
     print(f"  → milestone2/stats/test_confusion_matrix-CRNN.png")
     print(f"  → milestone2/stats/test_roc_curve-CRNN.png")
-    print(f"  → milestone2/checkpoints/best_model_final.pt")
+    print(f"  → checkpoints/checkpoints_crnn/best_model_final.pt")
 
 
 if __name__ == '__main__':
