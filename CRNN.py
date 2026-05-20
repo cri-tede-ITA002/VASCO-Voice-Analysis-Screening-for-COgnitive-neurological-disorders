@@ -389,13 +389,153 @@ def step_epoch(
 
     return total_loss / samples, correct / samples
 
+# -------------------- BOOTSTRAP STANDALONE --------------------
+
+EXPECTED_SHAPE = (3, N_MELS, MAX_FRAMES)   # (3, 64, 1024)
+
+
+def validate_and_fix_npy(root: Path) -> None:
+    """Elimina i .npy con shape errata così vengono rigenerati dal preprocessing."""
+    stale = []
+    for npy in root.rglob('*.npy'):
+        try:
+            arr = np.load(str(npy), mmap_mode='r')
+            if arr.shape != EXPECTED_SHAPE:
+                stale.append(npy)
+        except Exception:
+            stale.append(npy)
+    if stale:
+        print(f"  [FIX] {len(stale)} file .npy con shape errata "
+              f"(attesa {EXPECTED_SHAPE}) — eliminati per re-preprocessing.")
+        for p in stale:
+            p.unlink()
+
+
+def _find_best_checkpoint() -> Path:
+    """Trova best_model_final.pt oppure il best_auc_*.pt con AUC più alta."""
+    final = CHECKPOINT_DIR / 'best_model_final.pt'
+    if final.exists():
+        return final
+    candidates = sorted(CHECKPOINT_DIR.glob('best_auc_*.pt'))
+    if not candidates:
+        raise FileNotFoundError(
+            f"Nessun checkpoint in {CHECKPOINT_DIR}.\n"
+            "Esegui prima python CRNN.py per addestrare il modello."
+        )
+    def _auc(p: Path) -> float:
+        try:
+            return float(p.stem.split('_')[2])
+        except (IndexError, ValueError):
+            return 0.0
+    return max(candidates, key=_auc)
+
+
+def run_bootstrap_only(
+    checkpoint: str | None = None,
+    n_boot: int = 1000,
+    ci: float = 0.95,
+    seed: int = RANDOM_SEED,
+) -> None:
+    """
+    Carica un checkpoint già salvato ed esegue solo inferenza + bootstrap
+    sul test set, senza riaddestrare.
+    """
+    print(f"\n{'='*55}")
+    print("MODALITÀ BOOTSTRAP-ONLY")
+    print(f"{'='*55}\n")
+
+    # 1. Checkpoint
+    ckpt_path = Path(checkpoint) if checkpoint else _find_best_checkpoint()
+    print(f"Checkpoint : {ckpt_path}")
+
+    # 2. Modello
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print(f"Device     : {device}")
+    ckpt  = torch.load(ckpt_path, map_location=device, weights_only=False)
+    model = CRNNClassifier().to(device)
+    model.load_state_dict(ckpt['model_state_dict'])
+    model.eval()
+
+    # 3. Valida .npy ed eventuale re-preprocessing
+    print(f"\nValidazione .npy in {TEST_DIR} ...")
+    validate_and_fix_npy(TEST_DIR)
+    test_files, _ = gather_npy_files(TEST_DIR)
+    if len(test_files) == 0:
+        print("File .npy non trovati — eseguo preprocessing del test set ...")
+        preprocess_split(TEST_DIR, plot_root=None, do_plot=False)
+        test_files, _ = gather_npy_files(TEST_DIR)
+    if len(test_files) == 0:
+        raise RuntimeError(
+            f"Nessun .npy generato in {TEST_DIR}.\n"
+            f"Controlla che esistano .wav in {TEST_DIR}/HC e {TEST_DIR}/PD."
+        )
+    test_labels = np.array([0 if f.parent.name == 'HC' else 1 for f in test_files])
+    print(f"File test  : {len(test_files)}  "
+          f"(HC={np.sum(test_labels==0)}, PD={np.sum(test_labels==1)})")
+
+    test_dl = DataLoader(
+        MelSpecDataset(test_files.tolist()),
+        batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS
+    )
+
+    # 4. Inferenza
+    print("\nInferenza sul test set ...")
+    final = evaluate(model, test_dl, device)
+
+    print("\nMetriche puntuali (soglia ottimale F1):")
+    scalar_keys = [k for k, v in final.items() if not isinstance(v, np.ndarray)]
+    for k in scalar_keys:
+        v = final[k]
+        print(f"  {k:<12}: {v:.4f}" if isinstance(v, float) else f"  {k:<12}: {v}")
+
+    # 5. Bootstrap
+    print(f"\nEseguo bootstrap ({n_boot} iterazioni, CI {int(ci*100)}%) ...")
+    boot = bootstrap_evaluate(
+        final['y_true'], final['probs'], final['threshold'],
+        n_iterations=n_boot, ci=ci, seed=seed
+    )
+    print_bootstrap_results(boot, ci=ci, n_iterations=n_boot)
+
+    # 6. Salva
+    STATS_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = STATS_DIR / 'bootstrap_results.npz'
+    np.savez(
+        out_path,
+        y_true=final['y_true'],
+        y_prob=final['probs'],
+        **{f"boot_{k}_{stat}": v
+           for k, vals in boot.items()
+           for stat, v in vals.items()}
+    )
+    print(f"\nRisultati salvati in: {out_path}")
+
+
 # -------------------- MAIN --------------------
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument('-e', '--epochs', type=int, default=EPOCHS)
     parser.add_argument('--plot', action='store_true', help='Salva spettrogrammi Mel')
+    parser.add_argument(
+        '--bootstrap-only', action='store_true',
+        help='Salta il training: carica il checkpoint e riesegue solo bootstrap sul test set'
+    )
+    parser.add_argument('--checkpoint', type=str, default=None,
+                        help='Percorso checkpoint (usato con --bootstrap-only)')
+    parser.add_argument('--n-boot', type=int, default=1000,
+                        help='Iterazioni bootstrap (default 1000)')
+    parser.add_argument('--ci', type=float, default=0.95,
+                        help='Livello CI bootstrap (default 0.95)')
     args = parser.parse_args()
+
+    # ── modalità bootstrap-only ───────────────────────────────────────────
+    if args.bootstrap_only:
+        run_bootstrap_only(
+            checkpoint=args.checkpoint,
+            n_boot=args.n_boot,
+            ci=args.ci,
+        )
+        return
 
     print(f"EXECUTION TIME: {datetime.now():%Y-%m-%d %H:%M:%S}")
     print(f"Epoche: {args.epochs}")
