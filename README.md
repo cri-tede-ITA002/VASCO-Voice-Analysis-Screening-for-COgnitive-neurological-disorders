@@ -17,7 +17,7 @@ L'ipotesi centrale è che il Parkinson introduca anomalie acustiche misurabili �
 ```
 VASCO/
 │
-├── data/
+├── data/                          # Dataset vocali
 │   ├── data_original/
 │   │   ├── HC/
 │   │   └── PD/
@@ -31,18 +31,18 @@ VASCO/
 │       ├── HC/
 │       └── PD/
 │
-├── milestone2/
-│   └── checkpoints/          # Checkpoint salvati durante il training
+├── artifacts/                     # Artefatti di training (stats, metriche)
+├── checkpoints/                   # Checkpoint salvati (LSTM, CRNN)
+├── plots/                         # Plot generati durante il training
 │
-├── output_reports/           # Referti generati dall'agente VASCO
-│
-├── figure/                   # Figure per la relazione
-│
-├── augmented_def.py          # Data augmentation offline
-├── LSTM.py                   # Classificatore LSTM (baseline)
-├── CRNN.py                   # Classificatore CRNN
-├── AST.py                    # Audio Spectrogram Transformer (linear probing)
-└── parkinson_agent_crnn.py   # Agente VASCO (LangGraph + CRNN + MedGemma)
+├── LSTM_FINALE.py                 # Classificatore LSTM (baseline)
+├── CRNN_FINALE.py                 # Classificatore CRNN
+├── AST.FINALE.py                  # Audio Spectrogram Transformer (linear probing)
+├── agente.FINALE.py               # Agente VASCO (LangGraph + CRNN + MedGemma)
+├── app_FINALE.py                  # Interfaccia web Gradio
+├── augmented_def.py               # Data augmentation offline
+├── pre_process.ipynb              # Preprocessing esplorativo e EDA
+└── README.md
 ```
 
 ---
@@ -267,23 +267,29 @@ python augmented_def.py \
 
 ```bash
 # LSTM (baseline)
-python LSTM.py --epochs 15
+python LSTM_FINALE.py --epochs 15
 
 # CRNN
-python CRNN.py --epochs 20
+python CRNN_FINALE.py --epochs 20
 
 # AST (linear probing)
-python AST.py --epochs 15
+python AST.FINALE.py --epochs 15
 ```
 
 ### 3. Agente VASCO
 
 ```bash
-python parkinson_agent_crnn.py percorso/audio.wav
-python parkinson_agent_crnn.py percorso/audio.wav --patient-name "Mario Rossi"
+python agente.FINALE.py percorso/audio.wav
+python agente.FINALE.py percorso/audio.wav --patient-name "Mario Rossi"
 ```
 
 Il referto viene salvato in `output_reports/` e stampato a terminale.
+
+### 4. Interfaccia web
+
+```bash
+python app_FINALE.py
+```
 
 ---
 
